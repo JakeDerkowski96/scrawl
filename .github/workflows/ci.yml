@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # Windows because the shell (hotkeys, tray) is Win32-only and mypy
+    # type-checks it; Tk is also available on the hosted runner.
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check --output-format=github .
+
+      - name: Format check
+        run: ruff format --check .
+
+      - name: Type check
+        run: mypy src
+
+      - name: Test
+        run: pytest --junitxml=results.xml --cov-report=xml
+
+      - name: Smoke test
+        # Posts WM_HOTKEY to the real shell window; the real-keystroke checks
+        # skip themselves on a headless runner and are reported as SKIP.
+        run: python scripts/smoke_test.py
+
+      - name: Summary
+        if: always()
+        shell: pwsh
+        run: |
+          "### Scrawl CI (Python ${{ matrix.python-version }})" | Out-File -Append $env:GITHUB_STEP_SUMMARY
+          if (Test-Path results.xml) {
+            [xml]$r = Get-Content results.xml
+            $s = $r.testsuites.testsuite
+            "- Tests: $($s.tests) run, $($s.failures) failed, $($s.errors) errors, $($s.skipped) skipped" | Out-File -Append $env:GITHUB_STEP_SUMMARY
+          } else {
+            "- No test results were produced" | Out-File -Append $env:GITHUB_STEP_SUMMARY
+          }
